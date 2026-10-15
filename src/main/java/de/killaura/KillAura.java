@@ -17,29 +17,46 @@ import net.minecraft.util.math.Vec3d;
 import java.util.Comparator;
 import java.util.List;
 
-/** Die eigentliche Angriffslogik, wird jeden Tick aufgerufen. */
+/** Angriffslogik (jeden Tick) und Zielhilfe (jedes Bild). */
 public final class KillAura {
 	private static int delayTicks = 0;
+	private static LivingEntity aimTarget = null;
+	private static long lastFrameNanos = 0;
 
 	private KillAura() {}
 
+	/** Darf die Mod gerade etwas tun? Nur in eigenen Einzelspieler-Welten. */
+	private static boolean active(MinecraftClient client) {
+		ClientPlayerEntity player = client.player;
+		return KillAuraMod.CONFIG.enabled
+				&& player != null && client.world != null && client.interactionManager != null
+				&& client.isInSingleplayer()
+				&& client.currentScreen == null
+				&& !player.isDead() && !player.isSpectator();
+	}
+
+	/** Wird 20x pro Sekunde aufgerufen. */
 	public static void tick(MinecraftClient client) {
 		KillAuraConfig cfg = KillAuraMod.CONFIG;
+		if (!active(client)) {
+			aimTarget = null;
+			return;
+		}
 		ClientPlayerEntity player = client.player;
 
-		if (!cfg.enabled || player == null || client.world == null || client.interactionManager == null) return;
-		// Nur in eigenen Einzelspieler-Welten - auf Servern ist so etwas Cheating und fuehrt zu Bans.
-		if (!client.isInSingleplayer()) return;
-		if (client.currentScreen != null || player.isDead() || player.isSpectator()) return;
-		if (player.isUsingItem()) return; // z.B. beim Essen oder Blocken nicht unterbrechen
+		// Zielhilfe: Ziel aussuchen, die Kamera wird in onFrame() weich nachgefuehrt.
+		aimTarget = cfg.aimAssist ? findTarget(client, player, cfg, cfg.aimRange) : null;
 
+		// Automatisch schlagen
+		if (!cfg.autoAttack) return;
+		if (player.isUsingItem()) return; // z.B. beim Essen oder Blocken nicht unterbrechen
 		if (delayTicks > 0) {
 			delayTicks--;
 			return;
 		}
 		if (cfg.waitCooldown && player.getAttackCooldownProgress(0.5f) < 1.0f) return;
 
-		LivingEntity target = findTarget(client, player, cfg);
+		LivingEntity target = findTarget(client, player, cfg, cfg.range);
 		if (target == null) return;
 
 		if (cfg.rotate) lookAt(player, target);
@@ -49,8 +66,39 @@ public final class KillAura {
 		delayTicks = cfg.extraDelay;
 	}
 
-	private static LivingEntity findTarget(MinecraftClient client, ClientPlayerEntity player, KillAuraConfig cfg) {
-		double range = cfg.range;
+	/** Wird jedes Bild aufgerufen und dreht das Visier weich zum Ziel. */
+	public static void onFrame(MinecraftClient client) {
+		long now = System.nanoTime();
+		float dt = lastFrameNanos == 0 ? 0f : Math.min((now - lastFrameNanos) / 1_000_000_000f, 0.1f);
+		lastFrameNanos = now;
+
+		LivingEntity target = aimTarget;
+		if (target == null || !target.isAlive() || !active(client)) return;
+
+		// Tempo 1 = sehr sanft, 10 = fast sofort
+		float speed = (float) KillAuraMod.CONFIG.aimSpeed * 3.0f;
+		float factor = 1.0f - (float) Math.exp(-speed * dt);
+		turnTowards(client.player, target, factor);
+	}
+
+	private static void turnTowards(ClientPlayerEntity player, LivingEntity target, float factor) {
+		double dx = target.getX() - player.getX();
+		double dz = target.getZ() - player.getZ();
+		double dy = (target.getY() + target.getHeight() * 0.6) - player.getEyeY();
+		double horizontal = Math.sqrt(dx * dx + dz * dz);
+
+		float wantYaw = (float) (MathHelper.atan2(dz, dx) * (180.0 / Math.PI)) - 90.0f;
+		float wantPitch = (float) -(MathHelper.atan2(dy, horizontal) * (180.0 / Math.PI));
+
+		float yaw = player.getYaw() + MathHelper.wrapDegrees(wantYaw - player.getYaw()) * factor;
+		float pitch = MathHelper.clamp(player.getPitch() + (wantPitch - player.getPitch()) * factor, -90.0f, 90.0f);
+
+		player.setYaw(yaw);
+		player.setHeadYaw(yaw);
+		player.setPitch(pitch);
+	}
+
+	private static LivingEntity findTarget(MinecraftClient client, ClientPlayerEntity player, KillAuraConfig cfg, double range) {
 		Vec3d eyes = player.getEyePos();
 		Box area = player.getBoundingBox().expand(range + 1.0);
 
@@ -72,8 +120,7 @@ public final class KillAura {
 		if (e instanceof MerchantEntity) return cfg.villagers;
 		if (e instanceof TameableEntity t && t.isTamed()) return cfg.pets;
 
-		boolean isNeutral = e instanceof Angerable;
-		if (isNeutral) return cfg.neutral;
+		if (e instanceof Angerable) return cfg.neutral;
 		if (e instanceof Monster) return cfg.hostile;
 		if (e instanceof AnimalEntity) return cfg.animals;
 		return false; // Ruestungsstaender, Fische, Fledermaeuse usw. ignorieren
@@ -87,16 +134,6 @@ public final class KillAura {
 	}
 
 	private static void lookAt(ClientPlayerEntity player, LivingEntity target) {
-		double dx = target.getX() - player.getX();
-		double dz = target.getZ() - player.getZ();
-		double dy = (target.getY() + target.getHeight() * 0.5) - player.getEyeY();
-		double horizontal = Math.sqrt(dx * dx + dz * dz);
-
-		float yaw = (float) (MathHelper.atan2(dz, dx) * (180.0 / Math.PI)) - 90.0f;
-		float pitch = (float) -(MathHelper.atan2(dy, horizontal) * (180.0 / Math.PI));
-
-		player.setYaw(yaw);
-		player.setHeadYaw(yaw);
-		player.setPitch(MathHelper.clamp(pitch, -90.0f, 90.0f));
+		turnTowards(player, target, 1.0f);
 	}
 }

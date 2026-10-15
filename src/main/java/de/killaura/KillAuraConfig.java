@@ -22,6 +22,10 @@ public class KillAuraConfig {
 	public boolean villagers = false;     // Dorfbewohner, fahrende Haendler
 	public boolean pets = false;          // gezaehmte Tiere (Hunde, Katzen, Papageien ...)
 	public boolean players = false;       // andere Spieler (nur in deiner eigenen LAN-Welt moeglich)
+	public boolean autoAttack = true;     // automatisch schlagen (aus = du schlaegst selbst)
+	public boolean aimAssist = false;     // Visier folgt dem naechsten Ziel
+	public double aimRange = 6.0;         // 3.0 - 10.0 Bloecke
+	public double aimSpeed = 4.0;         // 1 (sanft) - 10 (schnell)
 	public boolean lineOfSight = true;    // nur angreifen, wenn das Ziel sichtbar ist
 	public boolean rotate = false;        // Blick zum Ziel drehen
 	public boolean waitCooldown = true;   // auf vollen Schlag warten (maximaler Schaden)
@@ -61,5 +65,7 @@ public class KillAuraConfig {
 	private void clamp() {
 		range = Math.max(2.0, Math.min(6.0, range));
 		extraDelay = Math.max(0, Math.min(20, extraDelay));
+		aimRange = Math.max(3.0, Math.min(10.0, aimRange));
+		aimSpeed = Math.max(1.0, Math.min(10.0, aimSpeed));
 	}
 }
